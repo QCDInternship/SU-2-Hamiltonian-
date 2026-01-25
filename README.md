@@ -11,3 +11,5 @@ The Hamiltonian implemented (with default couplings `J = 1`, `hx = 1`) is:
 
 SAMPLE RESULTS:
 
+![Entanglement entropy example](figures/final%20results.png)
+
