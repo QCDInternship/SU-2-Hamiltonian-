@@ -52,6 +52,8 @@ def pauli_string_op(label: str) -> np.ndarray:
     if not label:
         raise ValueError("Pauli label must be non-empty.")
 
+    # Start with the first one-qubit operator, then grow the full operator
+    # one site at a time with Kronecker products.
     op = PAULI_SINGLE[label[0]]
     for char in label[1:]:
         op = np.kron(op, PAULI_SINGLE[char])
@@ -86,35 +88,45 @@ def ising_matrix_element(
     if len(phi_b) != N:
         raise ValueError("phi_a and phi_b must have the same length.")
 
-    # Map computational bits to Z eigenvalues: 0 -> +1, 1 -> -1
+    # In the computational basis, each bit is also a Z eigenstate.
+    # Using spin values keeps the diagonal terms close to the formula.
     s_a = 1 - 2 * phi_a
     s_b = 1 - 2 * phi_b
 
-    # Diagonal contribution
+    # The ZZ interaction and the linear Z field are diagonal, so they only
+    # contribute when bra and ket are the same basis state.
     if np.array_equal(phi_a, phi_b):
         diag = 0.0
         max_i = N if periodic else N - 1
         for i in range(max_i):
+            # With periodic boundaries, the final site couples back to site 0.
+            # With open boundaries, the loop stops before that link.
             ip1 = (i + 1) % N if periodic else (i + 1)
             diag += J * s_a[i] * s_a[ip1]
         diag += -2.0 * J * float(np.sum(s_a))
         return diag
 
-    # Off-diagonal contribution: states must differ at exactly one site.
+    # The X_i term flips exactly one spin. If two states differ at zero sites
+    # or more than one site, this matrix element must vanish.
     diff_sites = np.nonzero(s_a != s_b)[0]
     if len(diff_sites) != 1:
         return 0.0
 
     i = int(diff_sites[0])
+    # This check is redundant for ordinary 0/1 spin states, but it makes the
+    # expected single-site flip explicit.
     if s_b[i] != -s_a[i]:
         return 0.0
 
     if periodic:
         im1 = (i - 1) % N
         ip1 = (i + 1) % N
+        # The local flip strength depends on the neighboring Z eigenvalues.
         nu_eig = (s_a[im1] + s_a[ip1]) / math.sqrt(2.0)
         return hx * nu_eig
 
+    # At an open boundary, the missing neighbor is treated as zero contribution
+    # rather than wrapping around to the other end of the chain.
     left = s_a[i - 1] if i - 1 >= 0 else 0.0
     right = s_a[i + 1] if i + 1 < N else 0.0
     nu_eig = (left + right) / math.sqrt(2.0)
@@ -152,6 +164,8 @@ class GaugeToIsingMapper:
     def build_gauge_basis(self) -> None:
         """Enumerate the full computational basis {0,1}^N."""
         self.gauge_basis.clear()
+        # product((0, 1), repeat=N) gives the standard binary ordering of all
+        # basis states, which matches the reshape convention used later.
         for bits in product((0, 1), repeat=self.n):
             self.gauge_basis.append(np.array(bits, dtype=int))
 
@@ -167,6 +181,8 @@ class GaugeToIsingMapper:
         self.gauge_to_ising = {}
 
         for g_idx, cfg in enumerate(self.gauge_basis):
+            # The mapping is currently one-to-one. Keeping the explicit map
+            # makes it easy to swap in a different ordering later.
             self.ising_basis.append(1 - 2 * cfg)
             self.gauge_to_ising[g_idx] = g_idx
 
@@ -181,10 +197,14 @@ class GaugeToIsingMapper:
         dim = len(self.gauge_basis)
         H = np.zeros((dim, dim), dtype=complex)
 
+        # Fill the full matrix from the supplied matrix element function.
+        # For small toy systems this is clear and flexible enough.
         for a, phi_a in enumerate(self.gauge_basis):
             for b, phi_b in enumerate(self.gauge_basis):
                 H[a, b] = matrix_element_fn(phi_a, phi_b)
 
+        # Numerical roundoff or future custom matrix elements can introduce
+        # tiny asymmetries, so we explicitly project back to a Hermitian matrix.
         self.H_gauge = 0.5 * (H + H.conj().T)
 
     def build_ising_hamiltonian(self) -> None:
@@ -197,6 +217,8 @@ class GaugeToIsingMapper:
         dim = len(self.gauge_basis)
         H_ising = np.zeros_like(self.H_gauge)
 
+        # This copy is trivial for the current one-to-one map, but the separate
+        # step mirrors the original mapper structure.
         for g_i in range(dim):
             i = self.gauge_to_ising[g_i]
             for g_j in range(dim):
@@ -229,6 +251,8 @@ class GaugeToIsingMapper:
         norm = np.linalg.norm(psi)
         if norm == 0:
             raise RuntimeError("Encountered a zero-norm eigenvector.")
+        # eigh already returns normalized columns, but normalizing here keeps
+        # this method robust if the source of eigenvectors changes later.
         return psi / norm
 
     def entanglement_entropy_of_state(
@@ -256,6 +280,7 @@ class GaugeToIsingMapper:
             raise ValueError(f"psi must have shape {(dim_expected,)}, got {psi.shape}.")
 
         if subsystem is None:
+            # By default, compare the first half of the chain with the rest.
             subsystem = tuple(range(self.n // 2))
         else:
             subsystem = tuple(int(i) for i in subsystem)
@@ -270,17 +295,23 @@ class GaugeToIsingMapper:
         complement = tuple(i for i in range(self.n) if i not in subsystem)
 
         psi = psi / np.linalg.norm(psi)
+        # Reshape the flat vector into an N-index tensor, one index per qubit.
         psi_tensor = psi.reshape((2,) * self.n)
+        # Move subsystem A to the front so the state can be viewed as a matrix
+        # Psi[a, b] between subsystem A and its complement B.
         reordered = np.transpose(psi_tensor, axes=subsystem + complement)
 
         dA = 2 ** len(subsystem)
         dB = 2 ** len(complement)
         Psi = reordered.reshape(dA, dB)
+        # Tracing out B gives rho_A. In matrix form, this is Psi Psi dagger.
         rho_A = Psi @ Psi.conj().T
 
         lambdas = np.linalg.eigvalsh(rho_A)
+        # Small negative values can appear from floating point noise.
         lambdas = np.clip(lambdas, 0.0, 1.0)
         eps = 1e-14
+        # Zero eigenvalues do not affect S, and removing them avoids log(0).
         lambdas = lambdas[lambdas > eps]
         if len(lambdas) == 0:
             return 0.0
@@ -312,6 +343,7 @@ class GaugeToIsingMapper:
         psi = self.get_eigenvector(eigen_index)
         profile: List[Tuple[int, float]] = []
         for L_A in range(1, self.n):
+            # Each profile point uses the first L_A sites as subsystem A.
             subsystem = tuple(range(L_A))
             entropy = self.entanglement_entropy_of_state(psi, subsystem=subsystem, log_base=log_base)
             profile.append((L_A, entropy))
@@ -333,12 +365,16 @@ class GaugeToIsingMapper:
             )
 
         self.pauli_coeffs.clear()
+        # Pauli strings are orthogonal under the Hilbert-Schmidt inner product:
+        # Tr(P_a P_b) = 2^N delta_ab. This gives the coefficient below.
         norm_factor = 2.0 ** self.n
 
         for label_tuple in product(use_operators, repeat=self.n):
             label = "".join(label_tuple)
             P = pauli_string_op(label)
             coeff = np.trace(self.H_ising @ P) / norm_factor
+            # Skip coefficients that are numerically zero so the output stays
+            # readable for larger systems.
             if abs(coeff) > cutoff:
                 self.pauli_coeffs[label] = coeff
 
@@ -354,6 +390,7 @@ class GaugeToIsingMapper:
             for i, ch in enumerate(label):
                 if ch != "I":
                     op_parts.append(f"σ^{ch}_{i}")
+            # If every factor is identity, print a plain identity term.
             op_str = " ".join(op_parts) if op_parts else "I"
             terms.append(f"{c.real:+.6g}{c.imag:+.6g}j * {op_str}")
 
@@ -365,6 +402,8 @@ class GaugeToIsingMapper:
 def build_mapper(n_sites: int, J: float, hx: float, periodic: bool = True) -> GaugeToIsingMapper:
     """Helper to build and diagonalize the model in one call."""
     mapper = GaugeToIsingMapper(n_sites=n_sites, periodic=periodic)
+    # Keep the setup steps separate so each method can still be tested or used
+    # independently, while the CLI has a compact path for the common case.
     mapper.build_gauge_basis()
     mapper.map_gauge_to_ising()
     mapper.build_gauge_hamiltonian(
@@ -425,6 +464,8 @@ if __name__ == "__main__":
     args = parse_args()
     periodic = not args.open_boundary
 
+    # Build everything up front, then the rest of the script only formats the
+    # requested pieces for display.
     mapper = build_mapper(
         n_sites=args.n_sites,
         J=args.J,
@@ -454,6 +495,7 @@ if __name__ == "__main__":
 
     subsystem = tuple(args.subsystem) if args.subsystem is not None and len(args.subsystem) > 0 else None
     if subsystem is None:
+        # Match the default used by entanglement_entropy_of_state().
         default_size = mapper.n // 2
         subsystem_str = f"first {default_size} qubit(s): {tuple(range(default_size))}"
     else:
