@@ -1,125 +1,136 @@
-# SU-2-Hamiltonian-
+# SU-2 plaquette-chain effective Ising-limit tools
 
-Entanglement entropy of 
-(2+1)-dimensional SU(2) lattice gauge theory on plaquette chains.
+This repository studies the **effective `j_max = 1/2` Ising limit** of an
+SU(2) plaquette-chain model. The working Hilbert space is the ordinary
+computational basis of `N` effective spins, with dimension `2**N`. Site 0 is
+the leftmost, most-significant bit.
 
-This repository currently contains two closely related **toy-model / Ising-limit** scripts:
+This is not the unreduced SU(2) electric-link basis. Full `j_max > 1/2` SU(2)
+dynamics, higher-representation link states, intertwiners, Wigner-symbol
+matrix elements, and a full higher-cutoff gauge Hamiltonian are not
+implemented.
 
-- `Hamiltonian.py` — the original **2-spin** version
-- `Hamiltonian_multispin.py` — the generalized **multi-spin** version for `N >= 2`
+## Canonical model and exact analysis
 
-These scripts are inspired by the `j_max = 1/2` truncation discussed in the accompanying paper, where the plaquette-chain problem maps to an effective Ising model. They are useful for exact diagonalization, entanglement-entropy calculations, and Pauli-string inspection in small systems.
+`ising_limit_model.py` is the canonical Hamiltonian implementation and the
+small-system exact-analysis library. It provides:
 
-## Implemented Hamiltonian
+- computational-basis enumeration and formatting;
+- dense, sparse, and matrix-free Hamiltonian representations;
+- dense exact diagonalisation with checked eigenpairs;
+- reduced density matrices and arbitrary-subsystem entanglement entropy;
+- entropy for every exact eigenstate;
+- analytical Pauli terms and a bounded trace-based validation decomposition;
+- a command-line interface for small-system inspection.
 
-With default couplings `J = 1` and `hx = 1`, the code implements the Ising-form Hamiltonian
+Other programs should reuse this module instead of restating the Hamiltonian.
+In particular, MPO construction consumes `iter_pauli_terms()`, while exact
+analysis consumes `build_dense_hamiltonian()` through `exact_diagonalize()`.
+
+### Hamiltonian modes
+
+`toy` mode implements
 
 \[
-H = \sum_i \left( J Z_i Z_{i+1} - 2J Z_i + h_x \, \nu_i X_i \right),
-\qquad
-\nu_i = \frac{Z_{i-1} + Z_{i+1}}{\sqrt{2}}.
+H = \sum_i \left[J Z_i Z_{i+1} - 2J Z_i
+  + h_x\frac{Z_{i-1}+Z_{i+1}}{\sqrt{2}}X_i\right].
 \]
 
-Periodic boundary conditions are used by default in the multi-spin code.
+It supports periodic and open boundaries. Missing neighbours contribute zero
+at open boundaries.
 
----
+`paper` mode retains the repository's appendix-inspired magnetic factor
 
-## File 1: `Hamiltonian.py`
+\[
+-2h_x\left(\frac{1-3Z_{i-1}}{4}\right)
+       \left(\frac{1-3Z_{i+1}}{4}\right)X_i,
+\]
 
-The original 2-spin example works in the computational basis
-`|00>, |01>, |10>, |11>`.
+and currently supports periodic boundaries only. The two conventions are
+deliberately separate and generally produce different spectra.
 
-### What it does
-1. enumerates the full basis of `{0,1}^2`,
-2. constructs the Hamiltonian matrix `H` by evaluating matrix elements,
-3. enforces Hermiticity via
-   \[
-   H \leftarrow \frac{H + H^\dagger}{2},
-   \]
-4. diagonalizes `H` using `numpy.linalg.eigh`,
-5. for each eigenvector \(\psi\), computes bipartite entanglement entropy between qubit 0 and qubit 1:
-   - reshape \(\psi\) into a `2×2` amplitude matrix \(\Psi\),
-   - compute \(\rho_A = \Psi \Psi^\dagger\),
-   - compute
-     \[
-     S(A) = -\mathrm{tr}(\rho_A \log \rho_A),
-     \]
-     with default log base 2, so entropy is reported in **bits**, 
-6. expands `H` in the Pauli-string basis using
-   \[
-   c_P = \frac{1}{2^n}\,\mathrm{tr}(H P).
-   \]
+## Command-line examples
 
-### Example output
-
-![Entanglement entropy example](./final%20results.png)
-
----
-
-## File 2: `Hamiltonian_multispin.py`
-
-This is the generalized version of the original mapper, extended from 2 spins to an arbitrary number of spins/qubits.
-
-### What it does
-1. enumerates the full computational basis `{0,1}^N`,
-2. builds the Hamiltonian matrix from matrix elements,
-3. diagonalizes the Hamiltonian exactly,
-4. computes bipartite entanglement entropy for **arbitrary subsystems**,
-5. optionally prints a contiguous-cut entanglement profile `S(L_A)` for `L_A = 1, ..., N-1`,
-6. optionally expands the Hamiltonian in a Pauli-string basis.
-
-### Key features
-- arbitrary system size `N >= 2`
-- periodic boundary conditions by default
-- optional open boundaries via CLI flag
-- entropy for any subsystem, e.g. `--subsystem 0 1`
-- optional Page-curve-style contiguous-cut profiles
-- optional Hamiltonian / eigenvector / Pauli-decomposition printing
-
-### Example commands
-
-Run a 4-spin system and compute default half-chain entanglement:
+Show the complete historical two-spin calculation using only canonical code:
 
 ```bash
-python Hamiltonian_multispin.py --n-sites 4
+python ising_limit_model.py --n-sites 2 --J 1 --hx 1 --mode toy --legacy-two-site-output
 ```
 
-Run a 5-spin system and compute the entropy of qubits 0 and 1 versus the rest:
+The old command remains as a small compatibility entry point:
 
 ```bash
-python Hamiltonian_multispin.py --n-sites 5 --subsystem 0 1
+python Hamiltonian.py
 ```
 
-Show contiguous-cut entanglement profiles for each eigenstate:
+It contains no Hamiltonian or analysis implementation and forwards to the
+canonical legacy-output mode.
+
+Inspect a four-site periodic TOY model:
 
 ```bash
-python Hamiltonian_multispin.py --n-sites 4 --show-profile
+python ising_limit_model.py --n-sites 4 --mode toy --show-basis --show-matrix --show-eigenvalues
 ```
 
-Use open instead of periodic boundary conditions:
+Calculate exact eigenstate entropies for a non-contiguous subsystem in nats:
 
 ```bash
-python Hamiltonian_multispin.py --n-sites 4 --open-boundary
+python ising_limit_model.py --n-sites 4 --subsystem 0 2 --entropy-base 2.718281828459045 --show-entropies
 ```
 
-Print a Pauli-string decomposition:
+Print the primary analytical Pauli decomposition:
 
 ```bash
-python Hamiltonian_multispin.py --n-sites 4 --decompose-pauli
+python ising_limit_model.py --n-sites 4 --mode paper --show-pauli --pauli-method analytical
 ```
 
----
+Cross-check a small Hamiltonian with the generic trace decomposition:
 
-## Notes and current scope
+```bash
+python ising_limit_model.py --n-sites 3 --show-pauli --pauli-method trace
+```
 
-- The current code is best viewed as a **small-system exact-diagonalization toy model**.
-- The multi-spin script is still in the **Ising / `j_max = 1/2` limit**, not the full `j_max > 1/2` SU(2) gauge-theory Hilbert space.
-- Because the Hilbert-space dimension grows as `2^N`, exact diagonalization becomes expensive quickly as `N` increases.
+Run `python ising_limit_model.py --help` for all matrix, eigenvector, entropy,
+boundary, cutoff, and dense-size options. Dense exact diagonalisation scales
+exponentially and is intended only for small `N`; trace Pauli decomposition
+scales as `4**N` and has a stricter safety limit.
 
-## Repository contents
+## Specialized analyses
 
-- `Hamiltonian.py` — original 2-spin demo
-- `Hamiltonian_multispin.py` — generalized multi-spin version
-- `Page curves.pdf` — reference paper / background material
-- `final results.png` — sample output from the 2-spin script
+- `Hamiltonian_multispin.py` retains an older stateful multi-spin interface
+  for compatibility. New exact-analysis code should use
+  `ising_limit_model.py`.
+- `hamiltonian_multispin_sparse.py` computes selected sparse or matrix-free
+  eigenpairs of the same canonical effective model.
+- `scar_state_search.py` searches the full effective-spin space for
+  low-entanglement outliers.
+- `page_curve_k0.py` and `k0_finite_size_scan.py` perform periodic zero-momentum
+  sector analysis.
+- `ising_limit_mpo.py` builds a TeNPy MPO from the analytical Pauli terms.
+- `dmrg_ground_state.py` runs finite two-site DMRG for the open-boundary TOY
+  model, and `validate_dmrg.py` compares it with canonical exact results.
+- `qvae_scar_detector.py` and `run_qvae_scar_detector.py` provide an optional
+  QVAE comparison for effective-model scar candidates.
 
+Sparse, k=0, scar, DMRG, and QVAE calculations in this repository remain
+calculations of the `j_max = 1/2` effective Ising model. A low-entanglement or
+QVAE-selected state is a candidate requiring further physical validation, not
+by itself proof of a quantum scar.
+
+## Optional dependencies
+
+SciPy is required by the sparse model. TeNPy is required for MPO/DMRG work.
+PennyLane and PyTorch are optional and only needed for the QVAE workflow; its
+additional requirements are listed in `requirements-ai.txt`.
+
+## Testing
+
+Run the suite with:
+
+```bash
+pytest -q
+```
+
+The regression tests freeze the historical two-spin matrix, spectrum,
+eigenpair residuals, entropies, Pauli coefficients, and reconstruction. They
+also verify the `Hamiltonian.py` compatibility entry point.
