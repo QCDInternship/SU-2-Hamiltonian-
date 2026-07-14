@@ -273,15 +273,6 @@ For a pure state, the Page curve is symmetric under
 N_A\longleftrightarrow N-N_A.
 ```
 
-A representative result is shown below.
-
-![Periodic zero momentum Page curve](page_curve_k0.png)
-
-View the available options with
-
-```bash
-python page_curve_k0.py --help
-```
 
 ### `k0_finite_size_scan.py`
 
